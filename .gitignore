@@ -1,0 +1,10 @@
+# Virtual environment
+legal_ai_env/
+venv/
+.env/
+
+# Large model files
+*.pkl
+*.pt
+*.dll
+*.lib
