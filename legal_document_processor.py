@@ -152,7 +152,7 @@ class LegalDocumentProcessor:
     def is_valid_org(self, org: str) -> bool:
         if not org or len(org) < 3 or len(org) > 80:
             return False
-        lower = org.lower()
+        lower = org.lower().strip()
         stopwords = {
             'company', 'employee', 'employer', 'party', 'parties', 'landlord', 'tenant',
             'licensor', 'licensee', 'lessor', 'lessee', 'buyer', 'seller', 'borrower',
@@ -164,14 +164,18 @@ class LegalDocumentProcessor:
             'intellectual property', 'data protection', 'notice', 'communication',
             'position', 'duties', 'formal', 'effective date', 'synthetic legal document',
             'human resources', 'machine learning', 'human resources title',
-            'signatures for the company', 'for the company'
+            'signatures for the company', 'for the company',
+            'nlp', 'ai', 'ml', 'pdf', 'api', 'url', 'hr', 'it', 'faq', 'nda',
+            'test', 'synthetic', 'test document', 'legal nlp', 'legal nlp test document'
         }
         if lower in stopwords:
             return False
         words = lower.split()
-        if len(words) == 1 and lower in {'company', 'employee', 'party', 'parties', 'security', 'formal', 'entire', 'notice', 'signatures'}:
+        if len(words) == 1 and lower in {'company', 'employee', 'party', 'parties', 'security', 'formal', 'entire', 'notice', 'signatures', 'nlp', 'ai', 'ml', 'pdf', 'synthetic'}:
             return False
         if lower.endswith(' title') or lower.startswith('termination') or lower.startswith('security') or lower.startswith('signatures') or lower.startswith('for '):
+            return False
+        if any(bad in lower for bad in ['nlp test', 'synthetic legal', 'test document', 'suggested nlp targets']):
             return False
         return True
 
