@@ -397,9 +397,30 @@ class LegalDocumentProcessor:
         
         return extracted_clauses
     
+    def format_summary_text(self, summary: str) -> str:
+        """Properly capitalize sentences, normalize punctuation, and format summary text"""
+        if not summary:
+            return ""
+        summary = summary.strip()
+        # Capitalize after periods, exclamation points, and question marks
+        sentences = re.split(r'([.!?]\s+)', summary)
+        capitalized_sentences = []
+        for s in sentences:
+            if s and not re.match(r'^[.!?]\s+$', s):
+                s = s[0].upper() + s[1:]
+            capitalized_sentences.append(s)
+        
+        formatted = "".join(capitalized_sentences)
+        if formatted and formatted[-1] not in '.!?':
+            formatted += '.'
+        return formatted
+
     def generate_summary(self, text: str, max_length: int = 120) -> str:
-        """Generate fast abstractive summary using T5 with inference mode"""
-        input_text = f"summarize: {text[:2000]}"
+        """Generate clean, capitalized abstractive summary using T5"""
+        # Filter out synthetic/disclaimer headers if present so summary focuses on contract body
+        cleaned_text = re.sub(r'^(?:Important\s*:\s*This is a fictional document.*?contract\.\s*|Legal NLP Test Document.*?Page \d+\s*|Synthetic Legal Document.*?NLP Testing\s*)', '', text, flags=re.IGNORECASE)
+        input_text = f"summarize: {cleaned_text[:2000].strip()}"
+        
         inputs = self.t5_tokenizer.encode(
             input_text,
             return_tensors="pt",
@@ -416,8 +437,8 @@ class LegalDocumentProcessor:
                 do_sample=False
             )
         
-        summary = self.t5_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-        return summary
+        raw_summary = self.t5_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+        return self.format_summary_text(raw_summary)
     
     def analyze_document(self, text: str) -> Dict[str, Any]:
         """Complete document analysis pipeline optimized for low latency"""
