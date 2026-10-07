@@ -259,8 +259,48 @@ class LegalDocumentProcessor:
             'GPE': sorted(list(gpes))
         }
 
+    def find_focused_context(self, question: str, text: str) -> str:
+        """Find the most relevant section/paragraphs for a specific clause question to accelerate QA"""
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 20]
+        if not paragraphs or len(paragraphs) <= 2:
+            return text[:2500]
+        
+        q_lower = question.lower()
+        if 'effective date' in q_lower or 'entered into' in q_lower:
+            keywords = ['effective date', 'entered into', 'agreement', 'preamble', 'dated']
+        elif 'salary' in q_lower or 'compensation' in q_lower:
+            keywords = ['salary', 'compensation', 'payable', 'bonus', 'gross annual', 'installments']
+        elif 'job title' in q_lower or 'position' in q_lower:
+            keywords = ['position', 'duties', 'employs', 'title', 'engineer', 'role']
+        elif 'duration' in q_lower or 'term' in q_lower:
+            keywords = ['term of employment', 'continue until', 'duration', 'initial term', 'begin on']
+        elif 'terminate' in q_lower or 'notice' in q_lower:
+            keywords = ['termination', 'written notice', 'terminate without cause', 'notice period']
+        elif 'law' in q_lower or 'governing' in q_lower:
+            keywords = ['governing law', 'laws of', 'jurisdiction']
+        elif 'jurisdiction' in q_lower or 'courts' in q_lower:
+            keywords = ['jurisdiction', 'courts located', 'governing law', 'disputes']
+        elif 'rent' in q_lower:
+            keywords = ['rent', 'monthly rent', 'per month', 'payment']
+        elif 'security deposit' in q_lower:
+            keywords = ['security deposit', 'deposit']
+        else:
+            keywords = [w for w in q_lower.split() if len(w) > 3]
+
+        scored = []
+        for p in paragraphs:
+            p_lower = p.lower()
+            score = sum(3 if kw in p_lower else 0 for kw in keywords)
+            scored.append((score, p))
+            
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_pars = [p for score, p in scored if score > 0][:2]
+        if best_pars:
+            return "\n\n".join(best_pars)
+        return text[:2500]
+
     def extract_key_clauses(self, text: str, document_type: str = None) -> Dict[str, str]:
-        """Extract key clauses using Question-Answering"""
+        """Extract key clauses using fast targeted Question-Answering"""
         
         if document_type == 'contract':
             clause_queries = [
@@ -299,25 +339,25 @@ class LegalDocumentProcessor:
         
         extracted_clauses = {}
         
-        for label, question in clause_queries:
-            try:
-                result = self.qa_pipeline(question=question, context=text)
-                if result['score'] > 0.05:
-                    answer_text = result['answer'].replace('■', '₹').strip()
-                    extracted_clauses[label] = {
-                        'text': answer_text,
-                        'confidence': result['score']
-                    }
-            except Exception as e:
-                self.logger.warning(f"Error extracting clause: {e}")
+        with torch.inference_mode():
+            for label, question in clause_queries:
+                try:
+                    focused_context = self.find_focused_context(question, text)
+                    result = self.qa_pipeline(question=question, context=focused_context)
+                    if result['score'] > 0.05:
+                        answer_text = result['answer'].replace('■', '₹').strip()
+                        extracted_clauses[label] = {
+                            'text': answer_text,
+                            'confidence': result['score']
+                        }
+                except Exception as e:
+                    self.logger.warning(f"Error extracting clause: {e}")
         
         return extracted_clauses
     
-    def generate_summary(self, text: str, max_length: int = 150) -> str:
-        """Generate abstractive summary using T5"""
-        
-        input_text = f"summarize: {text}"
-        
+    def generate_summary(self, text: str, max_length: int = 120) -> str:
+        """Generate fast abstractive summary using T5 with inference mode"""
+        input_text = f"summarize: {text[:2000]}"
         inputs = self.t5_tokenizer.encode(
             input_text,
             return_tensors="pt",
@@ -325,61 +365,60 @@ class LegalDocumentProcessor:
             truncation=True
         )
         
-        with torch.no_grad():
+        with torch.inference_mode():
             summary_ids = self.t5_model.generate(
                 inputs,
                 max_length=max_length,
-                min_length=30,
-                length_penalty=2.0,
-                num_beams=4,
-                early_stopping=True
+                min_length=25,
+                num_beams=1,
+                do_sample=False
             )
         
         summary = self.t5_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
         return summary
     
     def analyze_document(self, text: str) -> Dict[str, Any]:
-        """Complete document analysis pipeline"""
-        
+        """Complete document analysis pipeline optimized for low latency"""
         print("🔍 Starting document analysis...")
         
-        # Preprocess
-        processed_text = self.preprocess_text(text)
-        
-        # Classification
-        doc_classification = self.classify_document_type(processed_text)
-        print(f"📋 Document type: {doc_classification['document_type']}")
-        
-        # Entity extraction
-        entities = self.extract_legal_entities(processed_text)
-        print("🏷️ Entities extracted")
-        
-        # Clause extraction
-        clauses = self.extract_key_clauses(
-            processed_text, 
-            doc_classification['document_type']
-        )
-        print("📄 Key clauses extracted")
-        
-        # Summary generation
-        summary = self.generate_summary(processed_text)
-        print("📝 Summary generated")
-        
-        results = {
-            'document_info': {
-                'type': doc_classification['document_type'],
-                'confidence': doc_classification['confidence'],
-                'length': len(text.split()),
-                'processed_at': datetime.now().isoformat()
-            },
-            'entities': entities,
-            'key_clauses': clauses,
-            'summary': summary,
-            'classification_scores': doc_classification['all_scores']
-        }
-        
-        print("✅ Document analysis completed!")
-        return results
+        with torch.inference_mode():
+            # Preprocess
+            processed_text = self.preprocess_text(text)
+            
+            # Classification
+            doc_classification = self.classify_document_type(processed_text)
+            print(f"📋 Document type: {doc_classification['document_type']}")
+            
+            # Entity extraction
+            entities = self.extract_legal_entities(processed_text)
+            print("🏷️ Entities extracted")
+            
+            # Clause extraction
+            clauses = self.extract_key_clauses(
+                processed_text, 
+                doc_classification['document_type']
+            )
+            print("📄 Key clauses extracted")
+            
+            # Summary generation
+            summary = self.generate_summary(processed_text)
+            print("📝 Summary generated")
+            
+            results = {
+                'document_info': {
+                    'type': doc_classification['document_type'],
+                    'confidence': doc_classification['confidence'],
+                    'length': len(text.split()),
+                    'processed_at': datetime.now().isoformat()
+                },
+                'entities': entities,
+                'key_clauses': clauses,
+                'summary': summary,
+                'classification_scores': doc_classification['all_scores']
+            }
+            
+            print("✅ Document analysis completed!")
+            return results
 
 # Test function
 if __name__ == "__main__":
