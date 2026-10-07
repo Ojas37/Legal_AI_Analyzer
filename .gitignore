@@ -1,10 +1,33 @@
-# Virtual environment
+# Virtual environments
+.venv/
 legal_ai_env/
 venv/
+env/
 .env/
 
-# Large model files
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Large model binaries and cached weights
 *.pkl
 *.pt
+*.bin
+*.onnx
+*.safetensors
 *.dll
 *.lib
+
+# Logs and databases
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

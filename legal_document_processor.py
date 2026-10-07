@@ -99,61 +99,213 @@ class LegalDocumentProcessor:
             'all_scores': scores
         }
     
+    def clean_name(self, name: str) -> str:
+        cleaned = re.sub(r'^(?:Name|Title|Date|Signature|By|For|The|Mr\.?|Ms\.?|Mrs\.?|Dr\.?)\s*[:\-]?\s*', '', name, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\s+(?:Title|Date|Signature|Name)\s*:?.*$', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'[_\(\)\[\]\{\}\"\':;,]', ' ', cleaned)
+        return re.sub(r'\s+', ' ', cleaned).strip()
+
+    def clean_org(self, org: str) -> str:
+        cleaned = re.sub(r'^(?:For|The|By|To|From|Signatures?)\s+(?:the\s+)?', '', org, flags=re.IGNORECASE)
+        cleaned = re.sub(r'[_\(\)\[\]\{\}\"\':;]', ' ', cleaned)
+        return re.sub(r'\s+', ' ', cleaned).strip()
+
+    def is_valid_person(self, name: str) -> bool:
+        if not name or len(name) < 3 or len(name) > 45:
+            return False
+        lower = name.lower()
+        stopwords = {
+            'company', 'employee', 'employer', 'party', 'parties', 'landlord', 'tenant',
+            'licensor', 'licensee', 'lessor', 'lessee', 'buyer', 'seller', 'borrower',
+            'lender', 'contractor', 'client', 'customer', 'witness', 'director',
+            'officer', 'title', 'name', 'date', 'signature', 'signatures', 'agreement',
+            'confidential information', 'terms', 'term', 'section', 'schedule', 'exhibit',
+            'security', 'termination', 'jurisdiction', 'entire', 'severability',
+            'governing law', 'working hours', 'compensation', 'non-solicitation',
+            'intellectual property', 'data protection', 'notice', 'communication',
+            'position', 'duties', 'formal', 'effective date', 'synthetic legal document',
+            'human resources', 'machine learning', 'machine learning engineer',
+            'senior machine learning engineer', 'director human resources', 'effective',
+            'page', 'recitals', 'preamble', 'whereas', 'witnesseth', 'definitions',
+            'arbitration', 'indemnification', 'waiver', 'amendment', 'counterparts'
+        }
+        if lower in stopwords:
+            return False
+        words = lower.split()
+        if len(words) < 2 or len(words) > 4:
+            return False
+        invalid_words = {
+            'agreement', 'company', 'section', 'party', 'parties', 'learning',
+            'resources', 'engineer', 'developer', 'manager', 'director',
+            'analytics', 'technologies', 'solutions', 'corporation', 'limited', 'private',
+            'clause', 'schedule', 'document', 'information', 'signatures', 'signature',
+            'effective', 'date'
+        }
+        if any(w in invalid_words for w in words):
+            return False
+        if not re.match(r"^[A-Za-z\s\.\-']+$", name):
+            return False
+        if name.isupper() and len(words) > 1:
+            return False
+        return True
+
+    def is_valid_org(self, org: str) -> bool:
+        if not org or len(org) < 3 or len(org) > 80:
+            return False
+        lower = org.lower()
+        stopwords = {
+            'company', 'employee', 'employer', 'party', 'parties', 'landlord', 'tenant',
+            'licensor', 'licensee', 'lessor', 'lessee', 'buyer', 'seller', 'borrower',
+            'lender', 'contractor', 'client', 'customer', 'witness', 'director',
+            'officer', 'title', 'name', 'date', 'signature', 'signatures', 'agreement',
+            'confidential information', 'terms', 'term', 'section', 'schedule', 'exhibit',
+            'security', 'termination', 'jurisdiction', 'entire', 'severability',
+            'governing law', 'working hours', 'compensation', 'non-solicitation',
+            'intellectual property', 'data protection', 'notice', 'communication',
+            'position', 'duties', 'formal', 'effective date', 'synthetic legal document',
+            'human resources', 'machine learning', 'human resources title',
+            'signatures for the company', 'for the company'
+        }
+        if lower in stopwords:
+            return False
+        words = lower.split()
+        if len(words) == 1 and lower in {'company', 'employee', 'party', 'parties', 'security', 'formal', 'entire', 'notice', 'signatures'}:
+            return False
+        if lower.endswith(' title') or lower.startswith('termination') or lower.startswith('security') or lower.startswith('signatures') or lower.startswith('for '):
+            return False
+        return True
+
     def extract_legal_entities(self, text: str) -> Dict[str, List[str]]:
-        """Extract legal entities using NER"""
+        """Extract legal entities with precise filtering and pattern matching"""
         doc = self.nlp(text)
         
-        entities = {
-            'PERSON': [],
-            'ORG': [],
-            'DATE': [],
-            'MONEY': [],
-            'GPE': []
-        }
-        
+        persons = set()
+        orgs = set()
+        dates = set()
+        monies = set()
+        gpes = set()
+
+        # 1. Structural pattern extraction for Persons in signature blocks & recitals
+        name_matches = re.findall(r'Name\s*:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', text)
+        for name in name_matches:
+            cleaned = self.clean_name(name)
+            if self.is_valid_person(cleaned):
+                persons.add(cleaned)
+
+        preamble_persons = re.findall(
+            r'(?:and|between)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*\(\s*(?:the\s*)?[\"“]?(?:Employee|Consultant|Executive|Advisor|Contractor|Tenant|Landlord)[\"”]?',
+            text
+        )
+        for name in preamble_persons:
+            cleaned = self.clean_name(name)
+            if self.is_valid_person(cleaned):
+                persons.add(cleaned)
+
+        # Company preamble patterns
+        preamble_orgs = re.findall(
+            r'(?:and|between)\s+([A-Z][A-Za-z0-9\s,\.\-&]+?(?:Private Limited|Pvt\.?\s*Ltd\.?|Limited|Ltd\.?|LLC|Inc\.?|Corp\.?|Corporation|LLP))\s*[,(]',
+            text
+        )
+        for org in preamble_orgs:
+            cleaned = self.clean_org(org)
+            if self.is_valid_org(cleaned):
+                orgs.add(cleaned)
+
+        # 2. SpaCy NER with filtration
         for ent in doc.ents:
-            if ent.label_ in entities:
-                entities[ent.label_].append(ent.text)
-        
-        # Custom patterns
-        monetary_amounts = re.findall(r'\$[\d,]+(?:\.\d{2})?', text)
-        entities['monetary_amounts'] = monetary_amounts
-        
-        return entities
-    
+            raw_text = ent.text.strip()
+            
+            if ent.label_ == 'PERSON':
+                cleaned = self.clean_name(raw_text)
+                if self.is_valid_person(cleaned):
+                    persons.add(cleaned)
+            elif ent.label_ == 'ORG':
+                cleaned = self.clean_org(raw_text)
+                if self.is_valid_org(cleaned) and not self.is_valid_person(cleaned):
+                    orgs.add(cleaned)
+            elif ent.label_ in ('GPE', 'LOC', 'FAC'):
+                cleaned = self.clean_org(raw_text)
+                invalid_gpe = {'effective', 'effective date', 'section', 'agreement', 'date', 'page', 'employee', 'company', 'party'}
+                if len(cleaned) > 2 and cleaned.lower() not in invalid_gpe and not self.is_valid_person(cleaned) and not self.is_valid_org(cleaned):
+                    gpes.add(cleaned)
+            elif ent.label_ == 'DATE':
+                date_clean = re.sub(r'[\(\)\[\]\"]', '', raw_text).strip()
+                date_clean = re.sub(r'\s+Date$', '', date_clean, flags=re.IGNORECASE)
+                if (any(m in date_clean.lower() for m in ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']) or re.search(r'\b20\d{2}\b', date_clean)):
+                    if len(date_clean) > 3:
+                        dates.add(date_clean)
+            elif ent.label_ == 'MONEY':
+                cleaned_money = raw_text.replace('■', '₹').strip()
+                if cleaned_money:
+                    monies.add(cleaned_money)
+
+        # 3. Currency and monetary patterns ($, ₹, Rs, INR, €, £, Lakh, Crore)
+        currency_patterns = [
+            r'(?:[\$€£₹■]|Rs\.?|INR)\s*[\d,]+(?:\.\d{2})?(?:\s*(?:Lakh|Crore|Million|Billion))?',
+            r'\b[\d,]+(?:\.\d{2})?\s*(?:Indian Rupees|Rupees|USD|EUR|GBP|Lakh|Crore)\b'
+        ]
+        for pattern in currency_patterns:
+            matches = re.findall(pattern, text, flags=re.IGNORECASE)
+            for m in matches:
+                cleaned_m = m.replace('■', '₹').strip()
+                if cleaned_m:
+                    monies.add(cleaned_m)
+
+        return {
+            'PERSON': sorted(list(persons)),
+            'ORG': sorted(list(orgs)),
+            'DATE': sorted(list(dates)),
+            'MONEY': sorted(list(monies)),
+            'GPE': sorted(list(gpes))
+        }
+
     def extract_key_clauses(self, text: str, document_type: str = None) -> Dict[str, str]:
         """Extract key clauses using Question-Answering"""
         
         if document_type == 'contract':
-            questions = [
-                "What is the effective date?",
-                "Who are the parties?",
-                "What are the payment terms?",
-                "What is the governing law?"
+            clause_queries = [
+                ("Effective Date", "What is the date the agreement is entered into as of?"),
+                ("Parties Involved", "Who are the parties involved in the agreement?"),
+                ("Payment Terms", "What are the payment terms?"),
+                ("Governing Law", "What law governs this agreement?"),
+                ("Jurisdiction", "Which courts have jurisdiction?"),
+                ("Termination Notice", "How many days written notice is required to terminate?")
             ]
         elif document_type == 'employment':
-            questions = [
-                "What is the salary?",
-                "What is the job title?",
-                "When does employment start?",
-                "What are the benefits?"
+            clause_queries = [
+                ("Salary", "What is the salary or compensation?"),
+                ("Job Title", "What is the job title or position?"),
+                ("Effective Date", "What is the date the agreement is entered into as of?"),
+                ("Term of Employment", "What is the duration of the initial employment term until what date?"),
+                ("Termination Notice", "How many days written notice is required to terminate?"),
+                ("Governing Law", "What law governs this agreement?"),
+                ("Jurisdiction", "Which courts have jurisdiction?")
+            ]
+        elif document_type == 'lease':
+            clause_queries = [
+                ("Rent Amount", "What is the rent amount?"),
+                ("Lease Term", "What is the lease term?"),
+                ("Tenant", "Who is the tenant?"),
+                ("Landlord", "Who is the landlord?"),
+                ("Security Deposit", "What is the security deposit?")
             ]
         else:
-            questions = [
-                "What are the main terms?",
-                "Who are the parties involved?",
-                "What are the key obligations?"
+            clause_queries = [
+                ("Main Terms", "What are the main terms?"),
+                ("Parties Involved", "Who are the parties involved in the agreement?"),
+                ("Effective Date", "What is the date the agreement is entered into as of?"),
+                ("Governing Law", "What law governs this agreement?")
             ]
         
         extracted_clauses = {}
         
-        for question in questions:
+        for label, question in clause_queries:
             try:
                 result = self.qa_pipeline(question=question, context=text)
-                if result['score'] > 0.1:
-                    clause_key = question.replace("What is ", "").replace("What are ", "").replace("?", "")
-                    extracted_clauses[clause_key] = {
-                        'text': result['answer'],
+                if result['score'] > 0.05:
+                    answer_text = result['answer'].replace('■', '₹').strip()
+                    extracted_clauses[label] = {
+                        'text': answer_text,
                         'confidence': result['score']
                     }
             except Exception as e:
